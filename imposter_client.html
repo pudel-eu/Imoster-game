@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎭 Multiplayer Imposter Spiel</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #764ba2;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin: 5px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-danger { background: linear-gradient(45deg, #ff6b6b, #ee5a52); }
+        .btn-success { background: linear-gradient(45deg, #51cf66, #40c057); }
+        .btn-warning { background: linear-gradient(45deg, #ffd43b, #fab005); }
+        .btn-small { padding: 6px 12px; font-size: 12px; }
+        
+        .input-group {
+            margin: 15px 0;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        
+        .input-group input, .input-group textarea, .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        
+        .input-group input:focus, .input-group textarea:focus, .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .screen {
+            display: none;
+        }
+        
+        .screen.active {
+            display: block;
+        }
+        
+        /* Game Layout */
+        .game-layout {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            min-height: 80vh;
+        }
+        
+        .main-game {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .players-panel, .chat-panel {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .players-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .player-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 2px solid transparent;
+        }
+        
+        .player-item.admin {
+            border-color: #ffd43b;
+            background: #fff8e1;
+        }
+        
+        .player-item.you {
+            border-color: #667eea;
+            background: #e3f2fd;
+        }
+        
+        .player-stats {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        /* Chat */
+        .chat-messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+        }
+        
+        .chat-message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 8px;
+        }
+        
+        .chat-message.user {
+            background: #e3f2fd;
+        }
+        
+        .chat-message.system {
+            background: #fff3e0;
+            font-style: italic;
+        }
+        
+        .chat-message .sender {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        
+        .chat-message .time {
+            font-size: 11px;
+            color: #666;
+            float: right;
+        }
+        
+        .chat-input {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        /* Word Display */
+        .word-display {
+            font-size: 3em;
+            font-weight: bold;
+            text-align: center;
+            padding: 40px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 15px;
+            margin: 20px 0;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .imposter-hint {
+            background: #ffecb3;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 5px solid #ffa000;
+            margin: 20px 0;
+        }
+        
+        .game-status {
+            text-align: center;
+            padding: 20px;
+            background: #e3f2fd;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .skip-counter {
+            background: #f3e5f5;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        /* Stats Display */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .stat-item {
+            background: #e8f5e8;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4caf50;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        /* Library Selection */
+        .theme-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .theme-card {
+            background: white;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        
+        .theme-card:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+        
+        .theme-card.selected {
+            border-color: #4caf50;
+            background: #f1f8e9;
+        }
+        
+        .difficulty-options {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            margin-top: 5px;
+        }
+        
+        .difficulty-btn {
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .difficulty-btn:hover {
+            background: #f0f0f0;
+        }
+        
+        .difficulty-btn.selected {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .error-message {
+            background: #ffcdd2;
+            color: #d32f2f;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 5px solid #f44336;
+        }
+        
+        .success-message {
+            background: #c8e6c9;
+            color: #388e3c;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 5px solid #4caf50;
+        }
+        
+        .login-toggle {
+            text-align: center;
+            margin: 15px 0;
+        }
+        
+        .login-toggle a {
+            color: #667eea;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        
+        .login-toggle a:hover {
+            text-decoration: underline;
+        }
+        
+        .voting-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .vote-card {
+            background: #f8f9fa;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .vote-card:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+        
+        .vote-card.selected {
+            border-color: #4caf50;
+            background: #e8f5e8;
+        }
+        
+        .timer {
+            font-size: 2em;
+            font-weight: bold;
+            text-align: center;
+            color: #ff5722;
+            margin: 20px 0;
+        }
+        
+        @media (max-width: 768px) {
+            .game-layout {
+                grid-template-columns: 1fr;
+            }
+            
+            .word-display {
+                font-size: 2em;
+                padding: 20px;
+            }
+            
+            .theme-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .voting-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎭 Multiplayer Imposter Spiel</h1>
+            <p>Finde den Imposter unter euch!</p>
+        </div>
+
+        <!-- Login/Register Screen -->
+        <div id="auth-screen" class="screen active">
+            <div class="card">
+                <div id="login-form">
+                    <h2>Anmelden</h2>
+                    <div class="input-group">
+                        <label for="login-username">Benutzername:</label>
+                        <input type="text" id="login-username" placeholder="Dein Benutzername">
+                    </div>
+                    <div class="input-group">
+                        <label for="login-password">Passwort:</label>
+                        <input type="password" id="login-password" placeholder="Dein Passwort">
+                    </div>
+                    <button class="btn" onclick="login()">Anmelden</button>
+                    <div class="login-toggle">
+                        <a onclick="toggleAuthMode()">Noch kein Account? Registrieren</a>
+                    </div>
+                </div>
+                
+                <div id="register-form" style="display: none;">
+                    <h2>Registrieren</h2>
+                    <div class="input-group">
+                        <label for="register-username">Benutzername:</label>
+                        <input type="text" id="register-username" placeholder="Wähle einen Benutzernamen">
+                    </div>
+                    <div class="input-group">
+                        <label for="register-password">Passwort:</label>
+                        <input type="password" id="register-password" placeholder="Wähle ein Passwort">
+                    </div>
+                    <div class="input-group">
+                        <label for="register-confirm">Passwort bestätigen:</label>
+                        <input type="password" id="register-confirm" placeholder="Passwort wiederholen">
+                    </div>
+                    <button class="btn" onclick="register()">Registrieren</button>
+                    <div class="login-toggle">
+                        <a onclick="toggleAuthMode()">Bereits einen Account? Anmelden</a>
+                    </div>
+                </div>
+                
+                <div id="auth-message"></div>
+            </div>
+        </div>
+
+        <!-- Main Menu -->
+        <div id="menu-screen" class="screen">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                    <h2>Hauptmenü</h2>
+                    <div>
+                        <span id="username-display"></span>
+                        <button class="btn btn-small" onclick="showStats()">Statistiken</button>
+                        <button class="btn btn-small btn-danger" onclick="logout()">Abmelden</button>
+                    </div>
+                </div>
+                
+                <div style="text-align: center;">
+                    <button class="btn" onclick="showCreateRoom()">Raum erstellen</button>
+                    <button class="btn" onclick="showJoinRoom()">Raum beitreten</button>
+                </div>
+                
+                <div id="user-stats" style="display: none;">
+                    <h3>Deine Statistiken</h3>
+                    <div class="stats-grid" id="stats-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Room -->
+        <div id="create-room-screen" class="screen">
+            <div class="card">
+                <h2>Raum erstellen</h2>
+                <div class="input-group">
+                    <label for="room-name">Raumname:</label>
+                    <input type="text" id="room-name" placeholder="Gib dem Raum einen Namen">
+                </div>
+                <button class="btn" onclick="createRoom()">Raum erstellen</button>
+                <button class="btn btn-danger" onclick="showScreen('menu-screen')">Zurück</button>
+            </div>
+        </div>
+
+        <!-- Join Room -->
+        <div id="join-room-screen" class="screen">
+            <div class="card">
+                <h2>Raum beitreten</h2>
+                <div class="input-group">
+                    <label for="room-id">Raum-ID:</label>
+                    <input type="text" id="room-id" placeholder="Gib die Raum-ID ein">
+                </div>
+                <button class="btn" onclick="joinRoom()">Raum beitreten</button>
+                <button class="btn btn-danger" onclick="showScreen('menu-screen')">Zurück</button>
+            </div>
+        </div>
+
+        <!-- Game Room -->
+        <div id="game-screen" class="screen">
+            <div class="game-layout">
+                <div class="main-game">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h2 id="room-title"></h2>
+                        <div>
+                            <span id="room-id-display"></span>
+                            <button class="btn btn-small btn-danger" onclick="leaveRoom()">Raum verlassen</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Waiting Phase -->
+                    <div id="waiting-phase">
+                        <div class="game-status">
+                            <h3>Warte auf Spieler...</h3>
+                            <p>Mindestens 3 Spieler werden benötigt</p>
+                        </div>
+                        
+                        <div id="admin-controls" style="display: none;">
+                            <h3>Spieleinstellungen</h3>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0;">
+                                <div class="input-group">
+                                    <label for="max-players">Max. Spieler:</label>
+                                    <select id="max-players" onchange="updateSettings()">
+                                        <option value="6">6</option>
+                                        <option value="8">8</option>
+                                        <option value="10" selected>10</option>
+                                        <option value="12">12</option>
+                                    </select>
+                                </div>
+                                <div class="input-group">
+                                    <label for="round-time">Rundenzeit (Sekunden):</label>
+                                    <select id="round-time" onchange="updateSettings()">
+                                        <option value="180">3 Minuten</option>
+                                        <option value="300" selected>5 Minuten</option>
+                                        <option value="420">7 Minuten</option>
+                                        <option value="600">10 Minuten</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <h4>Wortbibliothek wählen:</h4>
+                            <div id="theme-selection" class="theme-grid"></div>
+                            
+                            <div style="text-align: center; margin-top: 30px;">
+                                <button class="btn btn-success" onclick="startGame()">Spiel starten</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Playing Phase -->
+                    <div id="playing-phase" style="display: none;">
+                        <div class="timer" id="game-timer"></div>
+                        
+                        <div id="normal-player-view">
+                            <div class="word-display" id="word-display"></div>
+                            <div class="game-status">
+                                <p>Beschreibe das Wort, ohne es direkt zu nennen!</p>
+                                <p>Versuche den Imposter zu finden, der das Wort nicht kennt.</p>
+                            </div>
+                        </div>
+                        
+                        <div id="imposter-view" style="display: none;">
+                            <div class="word-display">❓</div>
+                            <div class="imposter-hint">
+                                <h3>🎭 Du bist der Imposter!</h3>
+                                <p>Du kennst das Wort nicht. Versuche herauszufinden, was es ist, ohne aufzufallen!</p>
+                                <p>Höre zu, was die anderen sagen, und versuche mitzumachen.</p>
+                            </div>
+                        </div>
+                        
+                        <div class="skip-counter">
+                            <p>Runde vorzeitig beenden: <span id="skip-votes">0</span> / <span id="skip-needed">0</span> Stimmen</p>
+                            <button class="btn btn-warning" onclick="voteSkip()">Runde überspringen</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Voting Phase -->
+                    <div id="voting-phase" style="display: none;">
+                        <div class="game-status">
+                            <h3>🗳️ Abstimmungsphase</h3>
+                            <p>Wähle den Spieler, von dem du denkst, dass er der Imposter ist!</p>
+                        </div>
+                        <div class="voting-grid" id="voting-options"></div>
+                    </div>
+                    
+                    <!-- Game Results -->
+                    <div id="results-phase" style="display: none;">
+                        <div class="game-status" id="results-content"></div>
+                    </div>
+                </div>
+                
+                <div class="sidebar">
+                    <!-- Players Panel -->
+                    <div class="players-panel">
+                        <h3>Spieler (<span id="player-count">0</span>)</h3>
+                        <div class="players-list" id="players-list"></div>
+                    </div>
+                    
+                    <!-- Chat Panel -->
+                    <div class="chat-panel">
+                        <h3>Chat</h3>
+                        <div class="chat-messages" id="chat-messages"></div>
+                        <div class="chat-input">
+                            <input type="text" id="chat-input" placeholder="Nachricht eingeben..." onkeypress="handleChatKeyPress(event)">
+                            <button class="btn btn-small" onclick="sendMessage()">Senden</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Globale Variablen
+        let socket;
+        let currentUser = null;
+        let currentRoom = null;
+        let gameTimer = null;
+        let wordLibraries = {};
+        
+        // Socket.io Verbindung
+        socket = io();
+        
+        // Socket Events
+        socket.on('connect', () => {
+            console.log('Verbunden mit Server');
+            
+            // Token aus localStorage laden
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                socket.emit('authenticate', token);
+            }
+        });
+        
+        socket.on('authenticated', (user) => {
+            currentUser = user;
+            document.getElementById('username-display').textContent = `Willkommen, ${user.username}!`;
+            showScreen('menu-screen');
+            loadUserStats();
+        });
+        
+        socket.on('authError', (error) => {
+            console.log('Auth Error:', error);
+            localStorage.removeItem('authToken');
+            showScreen('auth-screen');
+            showMessage('Sitzung abgelaufen. Bitte melde dich erneut an.', 'error');
+        });
+        
+        socket.on('roomCreated', (data) => {
+            currentRoom = data.roomId;
+            document.getElementById('room-id-display').textContent = `Raum-ID: ${data.roomId}`;
+            showScreen('game-screen');
+        });
+        
+        socket.on('roomJoined', (data) => {
+            currentRoom = data.roomId;
+            document.getElementById('room-id-display').textContent = `Raum-ID: ${data.roomId}`;
+            showScreen('game-screen');
+        });
+        
+        socket.on('roomUpdate', (roomData) => {
+            updateRoom(roomData);
+        });
+        
+        socket.on('gameStarted', (data) => {
+            startGameUI(data);
+        });
+        
+        socket.on('votingPhase', (data) => {
+            startVotingPhase(data);
+        });
+        
+        socket.on('gameEnded', (data) => {
+            showGameResults(data);
+        });
+        
+        socket.on('chatMessage', (message) => {
+            addChatMessage(message);
+        });
+        
+        socket.on('error', (error) => {
+            showMessage(error, 'error');
+        });
+        
+        // Auth Funktionen
+        function toggleAuthMode() {
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+            
+            if (loginForm.style.display === 'none') {
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+            } else {
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+            }
+            
+            document.getElementById('auth-message').innerHTML = '';
+        }
+        
+        async function login() {
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value;
+            
+            if (!username || !password) {
+                showMessage('Bitte alle Felder ausfüllen', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    localStorage.setItem('authToken', data.token);
+                    currentUser = data.user;
+                    socket.emit('authenticate', data.token);
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            } catch (error) {
+                showMessage('Verbindungsfehler', 'error');
+            }
+        }
+        
+        async function register() {
+            const username = document.getElementById('register-username').value.trim();
+            const password = document.getElementById('register-password').value;
+            const confirm = document.getElementById('register-confirm').value;
+            
+            if (!username || !password || !confirm) {
+                showMessage('Bitte alle Felder ausfüllen', 'error');
+                return;
+            }
+            
+            if (password !== confirm) {
+                showMessage('Passwörter stimmen nicht überein', 'error');
+                return;
+            }
+            
+            if (password.length < 6) {
+                showMessage('Passwort muss mindestens 6 Zeichen lang sein', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    localStorage.setItem('authToken', data.token);
+                    currentUser = data.user;
+                    socket.emit('authenticate', data.token);
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            } catch (error) {
+                showMessage('Verbindungsfehler', 'error');
+            }
+        }
+        
+        function logout() {
+            localStorage.removeItem('authToken');
+            currentUser = null;
+            currentRoom = null;
+            socket.disconnect();
+            socket.connect();
+            showScreen('auth-screen');
+        }
+        
+        // Screen Management
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            document.getElementById(screenId).classList.add('active');
+        }
+        
+        function showMessage(message, type) {
+            const authMessage = document.getElementById('auth-message');
+            authMessage.innerHTML = `<div class="${type}-message">${message}</div>`;
+        }
+        
+        // Room Functions
+        function showCreateRoom() {
+            showScreen('create-room-screen');
+            loadWordLibraries();
+        }
+        
+        function showJoinRoom() {
+            showScreen('join-room-screen');
+        }
+        
+        function createRoom() {
+            const roomName = document.getElementById('room-name').value.trim();
+            
+            if (!roomName) {
+                showMessage('Bitte einen Raumnamen eingeben', 'error');
+                return;
+            }
+            
+            socket.emit('createRoom', roomName);
+        }
+        
+        function joinRoom() {
+            const roomId = document.getElementById('room-id').value.trim().toUpperCase();
+            
+            if (!roomId) {
+                showMessage('Bitte eine Raum-ID eingeben', 'error');
+                return;
+            }
+            
+            socket.emit('joinRoom', roomId);
+        }
+        
+        function leaveRoom() {
+            if (currentRoom) {
+                socket.emit('leaveRoom', currentRoom);
+                currentRoom = null;
+            }
+            showScreen('menu-screen');
+        }
+        
+        // Game Functions
+        function updateRoom(roomData) {
+            if (!roomData) return;
+            
+            document.getElementById('room-title').textContent = roomData.name;
+            document.getElementById('player-count').textContent = roomData.players.length;
+            
+            // Update players list
+            const playersList = document.getElementById('players-list');
+            playersList.innerHTML = '';
+            
+            roomData.players.forEach(player => {
+                const playerDiv = document.createElement('div');
+                playerDiv.className = 'player-item';
+                
+                if (player.isAdmin) playerDiv.classList.add('admin');
+                if (player.id === currentUser.id) playerDiv.classList.add('you');
+                
+                playerDiv.innerHTML = `
+                    <div>
+                        <strong>${player.username}</strong>
+                        ${player.isAdmin ? '👑' : ''}
+                        ${player.id === currentUser.id ? ' (Du)' : ''}
+                    </div>
+                `;
+                
+                playersList.appendChild(playerDiv);
+            });
+            
+            // Show admin controls if user is admin
+            const adminControls = document.getElementById('admin-controls');
+            const currentPlayer = roomData.players.find(p => p.id === currentUser.id);
+            if (currentPlayer && currentPlayer.isAdmin && roomData.gameState === 'waiting') {
+                adminControls.style.display = 'block';
+                updateThemeSelection();
+            } else {
+                adminControls.style.display = 'none';
+            }
+            
+            // Update game phase
+            updateGamePhase(roomData.gameState, roomData);
+        }
+        
+        function updateGamePhase(gameState, roomData) {
+            // Hide all phases
+            document.getElementById('waiting-phase').style.display = 'none';
+            document.getElementById('playing-phase').style.display = 'none';
+            document.getElementById('voting-phase').style.display = 'none';
+            document.getElementById('results-phase').style.display = 'none';
+            
+            switch (gameState) {
+                case 'waiting':
+                    document.getElementById('waiting-phase').style.display = 'block';
+                    break;
+                case 'playing':
+                    document.getElementById('playing-phase').style.display = 'block';
+                    if (roomData.currentRound.timeRemaining) {
+                        startTimer(roomData.currentRound.timeRemaining);
+                    }
+                    break;
+                case 'voting':
+                    document.getElementById('voting-phase').style.display = 'block';
+                    break;
+                case 'ended':
+                    document.getElementById('results-phase').style.display = 'block';
+                    break;
+            }
+        }
+        
+        async function loadWordLibraries() {
+            try {
+                const response = await fetch('/api/libraries');
+                wordLibraries = await response.json();
+                updateThemeSelection();
+            } catch (error) {
+                console.log('Fehler beim Laden der Wortbibliotheken:', error);
+            }
+        }
+        
+        function updateThemeSelection() {
+            const container = document.getElementById('theme-selection');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            Object.entries(wordLibraries).forEach(([key, library]) => {
+                const themeDiv = document.createElement('div');
+                themeDiv.className = 'theme-card';
+                themeDiv.onclick = () => selectTheme(key, themeDiv);
+                
+                if (key === 'animals') themeDiv.classList.add('selected');
+                
+                themeDiv.innerHTML = `
+                    <h4>${library.name}</h4>
+                    <p>${library.description}</p>
+                    <div class="difficulty-options">
+                        <button class="difficulty-btn ${key === 'animals' ? 'selected' : ''}" data-difficulty="easy">Leicht</button>
+                        <button class="difficulty-btn ${key === 'animals' ? 'selected' : ''}" data-difficulty="medium">Mittel</button>
+                        <button class="difficulty-btn" data-difficulty="hard">Schwer</button>
+                    </div>
+                `;
+                
+                container.appendChild(themeDiv);
+            });
+        }
+        
+        function selectTheme(theme, element) {
+            document.querySelectorAll('.theme-card').forEach(card => card.classList.remove('selected'));
+            element.classList.add('selected');
+            
+            // Update difficulty selection
+            element.querySelectorAll('.difficulty-btn').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    element.querySelectorAll('.difficulty-btn').forEach(b => b.classList.remove('selected'));
+                    btn.classList.add('selected');
+                    updateSettings();
+                };
+            });
+            
+            updateSettings();
+        }
+        
+        function updateSettings() {
+            if (!currentRoom) return;
+            
+            const maxPlayers = document.getElementById('max-players').value;
+            const roundTime = document.getElementById('round-time').value;
+            
+            const selectedTheme = document.querySelector('.theme-card.selected');
+            const selectedDifficulty = selectedTheme ? selectedTheme.querySelector('.difficulty-btn.selected') : null;
+            
+            const settings = {
+                maxPlayers: parseInt(maxPlayers),
+                roundTime: parseInt(roundTime),
+                theme: Object.keys(wordLibraries).find(key => 
+                    selectedTheme && selectedTheme.textContent.includes(wordLibraries[key].name)
+                ) || 'animals',
+                difficulty: selectedDifficulty ? selectedDifficulty.dataset.difficulty : 'medium'
+            };
+            
+            socket.emit('updateSettings', { roomId: currentRoom, settings });
+        }
+        
+        function startGame() {
+            if (currentRoom) {
+                socket.emit('startGame', currentRoom);
+            }
+        }
+        
+        function startGameUI(data) {
+            if (data.isImposter) {
+                document.getElementById('normal-player-view').style.display = 'none';
+                document.getElementById('imposter-view').style.display = 'block';
+            } else {
+                document.getElementById('normal-player-view').style.display = 'block';
+                document.getElementById('imposter-view').style.display = 'none';
+                document.getElementById('word-display').textContent = data.word;
+            }
+            
+            startTimer(data.timeLimit);
+            updateSkipCounter();
+        }
+        
+        function startTimer(seconds) {
+            if (gameTimer) clearInterval(gameTimer);
+            
+            let timeLeft = seconds;
+            const timerElement = document.getElementById('game-timer');
+            
+            function updateTimer() {
+                const minutes = Math.floor(timeLeft / 60);
+                const secs = timeLeft % 60;
+                timerElement.textContent = `${minutes}:${secs.toString().padStart(2, '0')}`;
+                
+                if (timeLeft <= 0) {
+                    clearInterval(gameTimer);
+                    timerElement.textContent = 'Zeit abgelaufen!';
+                }
+                timeLeft--;
+            }
+            
+            updateTimer();
+            gameTimer = setInterval(updateTimer, 1000);
+        }
+        
+        function updateSkipCounter() {
+            // This would be updated by server events
+            document.getElementById('skip-votes').textContent = '0';
+            document.getElementById('skip-needed').textContent = Math.ceil(currentRoom ? 3 : 0); // Placeholder
+        }
+        
+        function voteSkip() {
+            if (currentRoom) {
+                socket.emit('skipVote', currentRoom);
+            }
+        }
+        
+        function startVotingPhase(data) {
+            const votingOptions = document.getElementById('voting-options');
+            votingOptions.innerHTML = '';
+            
+            data.players.forEach(player => {
+                if (player.id === currentUser.id) return; // Can't vote for yourself
+                
+                const voteCard = document.createElement('div');
+                voteCard.className = 'vote-card';
+                voteCard.onclick = () => vote(player.id, voteCard);
+                
+                voteCard.innerHTML = `
+                    <h4>${player.username}</h4>
+                    <p>Als Imposter verdächtigen</p>
+                `;
+                
+                votingOptions.appendChild(voteCard);
+            });
+        }
+        
+        function vote(playerId, element) {
+            document.querySelectorAll('.vote-card').forEach(card => card.classList.remove('selected'));
+            element.classList.add('selected');
+            
+            socket.emit('vote', { roomId: currentRoom, playerId });
+        }
+        
+        function showGameResults(data) {
+            const resultsContent = document.getElementById('results-content');
+            
+            let resultHTML = `
+                <h3>🎮 Spiel beendet!</h3>
+                <div style="margin: 20px 0;">
+                    <h4>Das Wort war: <em>${data.word}</em></h4>
+                    <h4>Der Imposter war: <strong>${data.imposter.username}</strong> 🎭</h4>
+            `;
+            
+            if (data.votedOut) {
+                resultHTML += `<h4>Rausgewählt wurde: <strong>${data.votedOut.username}</strong></h4>`;
+            }
+            
+            if (data.imposterWon) {
+                resultHTML += `
+                    <div style="background: #ffecb3; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                        <h3>🎭 Der Imposter hat gewonnen!</h3>
+                        <p>Der Imposter wurde nicht entdeckt oder ein unschuldiger Spieler wurde rausgewählt.</p>
+                    </div>
+                `;
+            } else {
+                resultHTML += `
+                    <div style="background: #c8e6c9; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                        <h3>✅ Die Spieler haben gewonnen!</h3>
+                        <p>Der Imposter wurde erfolgreich entdeckt!</p>
+                    </div>
+                `;
+            }
+            
+            resultHTML += `</div><p>Kehre in 10 Sekunden zur Lobby zurück...</p>`;
+            resultsContent.innerHTML = resultHTML;
+            
+            // Clear timer
+            if (gameTimer) {
+                clearInterval(gameTimer);
+                gameTimer = null;
+            }
+        }
+        
+        // Chat Functions
+        function addChatMessage(message) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${message.type}`;
+            
+            messageDiv.innerHTML = `
+                <span class="sender">${message.sender}:</span>
+                <span class="message">${message.message}</span>
+                <span class="time">${message.timestamp}</span>
+            `;
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            
+            if (message && currentRoom) {
+                socket.emit('sendMessage', { roomId: currentRoom, message });
+                input.value = '';
+            }
+        }
+        
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+        
+        // Stats Functions
+        async function loadUserStats() {
+            if (!currentUser) return;
+            
+            try {
+                const response = await fetch(`/api/stats/${currentUser.id}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentUser.stats = data.stats;
+                }
+            } catch (error) {
+                console.log('Fehler beim Laden der Statistiken:', error);
+            }
+        }
+        
+        function showStats() {
+            const statsContainer = document.getElementById('stats-container');
+            const userStats = document.getElementById('user-stats');
+            
+            if (userStats.style.display === 'none') {
+                if (currentUser && currentUser.stats) {
+                    const stats = currentUser.stats;
+                    statsContainer.innerHTML = `
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.gamesPlayed}</div>
+                            <div class="stat-label">Spiele gespielt</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.gamesWon}</div>
+                            <div class="stat-label">Spiele gewonnen</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.winRate}%</div>
+                            <div class="stat-label">Gewinnrate</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.timesImposter}</div>
+                            <div class="stat-label">Mal Imposter</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.timesCaughtImposter}</div>
+                            <div class="stat-label">Als Imposter erwischt</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${stats.imposterSuccessRate}%</div>
+                            <div class="stat-label">Imposter Erfolgsrate</div>
+                        </div>
+                    `;
+                }
+                userStats.style.display = 'block';
+            } else {
+                userStats.style.display = 'none';
+            }
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check if user is already logged in
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                // Will be handled by socket connect event
+            } else {
+                showScreen('auth-screen');
+            }
+            
+            // Enable Enter key for login forms
+            document.getElementById('login-password').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') login();
+            });
+            
+            document.getElementById('register-confirm').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') register();
+            });
+            
+            document.getElementById('room-name').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') createRoom();
+            });
+            
+            document.getElementById('room-id').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') joinRoom();
+            });
+        });
+    </script>
+</body>
+</html>
