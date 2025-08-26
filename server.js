@@ -20,34 +20,44 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-t
 
 // Middleware
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname)));
 
-// Serve index.html from root for Railway/Render compatibility
+// Serve index.html from root
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Database Setup
-const db = new sqlite3.Database(':memory:'); // Using in-memory DB for simplicity
+// Database Setup - Using persistent file database
+const dbPath = process.env.NODE_ENV === 'production' ? ':memory:' : './game.db';
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+        console.error('Database connection error:', err);
+    } else {
+        console.log('Connected to SQLite database');
+    }
+});
 
+// Initialize database tables
 db.serialize(() => {
-    // Users table
-    db.run(`CREATE TABLE users (
+    db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+    )`, (err) => {
+        if (err) console.error('Error creating users table:', err);
+    });
     
-    // Game stats table
-    db.run(`CREATE TABLE user_stats (
+    db.run(`CREATE TABLE IF NOT EXISTS user_stats (
         user_id INTEGER PRIMARY KEY,
         games_played INTEGER DEFAULT 0,
         games_won INTEGER DEFAULT 0,
         times_imposter INTEGER DEFAULT 0,
         times_caught_imposter INTEGER DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
+    )`, (err) => {
+        if (err) console.error('Error creating user_stats table:', err);
+    });
 });
 
 // Word Libraries
@@ -62,7 +72,7 @@ const wordLibraries = {
         }
     },
     food: {
-        name: "Essen & Trinken",
+        name: "Essen & Trinken", 
         description: "Leckere Speisen und Getränke",
         words: {
             easy: ["Apfel", "Brot", "Käse", "Milch", "Wasser", "Reis", "Nudeln", "Ei", "Butter", "Zucker"],
@@ -72,7 +82,7 @@ const wordLibraries = {
     },
     objects: {
         name: "Gegenstände",
-        description: "Alltägliche und besondere Gegenstände",
+        description: "Alltägliche und besondere Gegenstände", 
         words: {
             easy: ["Stuhl", "Tisch", "Buch", "Telefon", "Auto", "Haus", "Fenster", "Tür", "Lampe", "Uhr"],
             medium: ["Computer", "Mikrowelle", "Staubsauger", "Waschmaschine", "Fernseher", "Kühlschrank", "Sofa", "Schrank", "Spiegel", "Bild"],
@@ -93,6 +103,7 @@ const wordLibraries = {
 // Game State Management
 const rooms = new Map();
 const users = new Map();
+const roomTimers = new Map();
 
 class GameRoom {
     constructor(id, name, adminId) {
@@ -112,13 +123,19 @@ class GameRoom {
             imposter: null,
             timeRemaining: 0,
             skipVotes: new Set(),
-            votes: new Map()
+            votes: new Map(),
+            startTime: null
         };
         this.gameHistory = [];
     }
     
     addPlayer(player) {
         if (this.players.length >= this.settings.maxPlayers) {
+            return false;
+        }
+        
+        // Check if player is already in room
+        if (this.players.find(p => p.id === player.id)) {
             return false;
         }
         
@@ -162,6 +179,7 @@ class GameRoom {
         this.currentRound.timeRemaining = this.settings.roundTime;
         this.currentRound.skipVotes.clear();
         this.currentRound.votes.clear();
+        this.currentRound.startTime = Date.now();
         
         return true;
     }
@@ -172,15 +190,18 @@ class GameRoom {
         
         if (this.currentRound.skipVotes.size >= needed) {
             this.endRound();
+            return true;
         }
+        return false;
     }
     
     addVote(voterId, targetId) {
         this.currentRound.votes.set(voterId, targetId);
         
         if (this.currentRound.votes.size === this.players.length) {
-            this.endGame();
+            return this.endGame();
         }
+        return null;
     }
     
     endRound() {
@@ -222,11 +243,6 @@ class GameRoom {
         // Update player stats
         this.updatePlayerStats(imposterWon, mostVoted);
         
-        // Reset game after 10 seconds
-        setTimeout(() => {
-            this.resetGame();
-        }, 10000);
-        
         return {
             word: this.currentRound.word,
             imposter: this.currentRound.imposter,
@@ -242,25 +258,28 @@ class GameRoom {
             
             // Update database
             db.get('SELECT * FROM user_stats WHERE user_id = ?', [player.id], (err, row) => {
-                if (err) return;
-                
-                if (!row) {
-                    db.run('INSERT INTO user_stats (user_id) VALUES (?)', [player.id]);
-                    row = { games_played: 0, games_won: 0, times_imposter: 0, times_caught_imposter: 0 };
+                if (err) {
+                    console.error('Database error:', err);
+                    return;
                 }
                 
-                const newStats = {
-                    games_played: row.games_played + 1,
-                    games_won: row.games_won + (won ? 1 : 0),
-                    times_imposter: row.times_imposter + (isImposter ? 1 : 0),
-                    times_caught_imposter: row.times_caught_imposter + (isImposter && votedOut && votedOut.id === player.id ? 1 : 0)
-                };
-                
-                db.run(`UPDATE user_stats SET 
-                    games_played = ?, games_won = ?, times_imposter = ?, times_caught_imposter = ?
-                    WHERE user_id = ?`, 
-                    [newStats.games_played, newStats.games_won, newStats.times_imposter, newStats.times_caught_imposter, player.id]
-                );
+                if (!row) {
+                    db.run('INSERT INTO user_stats (user_id, games_played, games_won, times_imposter, times_caught_imposter) VALUES (?, 1, ?, ?, ?)', 
+                        [player.id, won ? 1 : 0, isImposter ? 1 : 0, (isImposter && votedOut && votedOut.id === player.id) ? 1 : 0]);
+                } else {
+                    const newStats = {
+                        games_played: row.games_played + 1,
+                        games_won: row.games_won + (won ? 1 : 0),
+                        times_imposter: row.times_imposter + (isImposter ? 1 : 0),
+                        times_caught_imposter: row.times_caught_imposter + (isImposter && votedOut && votedOut.id === player.id ? 1 : 0)
+                    };
+                    
+                    db.run(`UPDATE user_stats SET 
+                        games_played = ?, games_won = ?, times_imposter = ?, times_caught_imposter = ?
+                        WHERE user_id = ?`, 
+                        [newStats.games_played, newStats.games_won, newStats.times_imposter, newStats.times_caught_imposter, player.id]
+                    );
+                }
             });
         });
     }
@@ -272,7 +291,8 @@ class GameRoom {
             imposter: null,
             timeRemaining: 0,
             skipVotes: new Set(),
-            votes: new Map()
+            votes: new Map(),
+            startTime: null
         };
     }
     
@@ -301,6 +321,10 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'Username und Passwort sind erforderlich' });
         }
         
+        if (username.length < 3) {
+            return res.status(400).json({ error: 'Benutzername muss mindestens 3 Zeichen lang sein' });
+        }
+        
         if (password.length < 6) {
             return res.status(400).json({ error: 'Passwort muss mindestens 6 Zeichen lang sein' });
         }
@@ -311,6 +335,7 @@ app.post('/api/register', async (req, res) => {
             [username, hashedPassword], 
             function(err) {
                 if (err) {
+                    console.error('Database error:', err);
                     if (err.message.includes('UNIQUE constraint failed')) {
                         return res.status(400).json({ error: 'Benutzername bereits vergeben' });
                     }
@@ -320,7 +345,9 @@ app.post('/api/register', async (req, res) => {
                 const token = jwt.sign({ id: this.lastID, username }, JWT_SECRET, { expiresIn: '7d' });
                 
                 // Create initial stats
-                db.run('INSERT INTO user_stats (user_id) VALUES (?)', [this.lastID]);
+                db.run('INSERT INTO user_stats (user_id) VALUES (?)', [this.lastID], (err) => {
+                    if (err) console.error('Stats creation error:', err);
+                });
                 
                 res.json({
                     token,
@@ -329,6 +356,7 @@ app.post('/api/register', async (req, res) => {
             }
         );
     } catch (error) {
+        console.error('Register error:', error);
         res.status(500).json({ error: 'Serverfehler' });
     }
 });
@@ -337,23 +365,39 @@ app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body;
         
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username und Passwort sind erforderlich' });
+        }
+        
         db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
             if (err) {
+                console.error('Database error:', err);
                 return res.status(500).json({ error: 'Serverfehler' });
             }
             
-            if (!user || !await bcrypt.compare(password, user.password)) {
+            if (!user) {
                 return res.status(400).json({ error: 'Ungültige Anmeldedaten' });
             }
             
-            const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-            
-            res.json({
-                token,
-                user: { id: user.id, username: user.username }
-            });
+            try {
+                const validPassword = await bcrypt.compare(password, user.password);
+                if (!validPassword) {
+                    return res.status(400).json({ error: 'Ungültige Anmeldedaten' });
+                }
+                
+                const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+                
+                res.json({
+                    token,
+                    user: { id: user.id, username: user.username }
+                });
+            } catch (bcryptError) {
+                console.error('Bcrypt error:', bcryptError);
+                return res.status(500).json({ error: 'Serverfehler' });
+            }
         });
     } catch (error) {
+        console.error('Login error:', error);
         res.status(500).json({ error: 'Serverfehler' });
     }
 });
@@ -363,10 +407,15 @@ app.get('/api/libraries', (req, res) => {
 });
 
 app.get('/api/stats/:userId', (req, res) => {
-    const userId = req.params.userId;
+    const userId = parseInt(req.params.userId);
+    
+    if (isNaN(userId)) {
+        return res.status(400).json({ error: 'Ungültige Benutzer-ID' });
+    }
     
     db.get('SELECT * FROM user_stats WHERE user_id = ?', [userId], (err, stats) => {
         if (err) {
+            console.error('Database error:', err);
             return res.status(500).json({ error: 'Serverfehler' });
         }
         
@@ -409,6 +458,7 @@ io.on('connection', (socket) => {
             
             socket.emit('authenticated', { id: decoded.id, username: decoded.username });
         } catch (error) {
+            console.error('JWT verification error:', error);
             socket.emit('authError', 'Token ungültig');
         }
     });
@@ -437,6 +487,8 @@ io.on('connection', (socket) => {
         
         socket.emit('roomCreated', { roomId });
         socket.emit('roomUpdate', room.toJSON());
+        
+        console.log(`Room ${roomId} created by ${socket.username}`);
     });
     
     socket.on('joinRoom', (roomId) => {
@@ -464,7 +516,7 @@ io.on('connection', (socket) => {
         };
         
         if (!room.addPlayer(player)) {
-            socket.emit('error', 'Raum ist voll');
+            socket.emit('error', 'Raum ist voll oder du bist bereits im Raum');
             return;
         }
         
@@ -481,6 +533,8 @@ io.on('connection', (socket) => {
             timestamp: new Date().toLocaleTimeString(),
             type: 'system'
         });
+        
+        console.log(`${socket.username} joined room ${roomId}`);
     });
     
     socket.on('leaveRoom', (roomId) => {
@@ -489,9 +543,16 @@ io.on('connection', (socket) => {
         
         socket.leave(roomId);
         
+        // Clear any existing timer
+        if (roomTimers.has(roomId)) {
+            clearInterval(roomTimers.get(roomId));
+            roomTimers.delete(roomId);
+        }
+        
         if (room.removePlayer(socket.userId)) {
             // Room is empty, delete it
             rooms.delete(roomId);
+            console.log(`Room ${roomId} deleted (empty)`);
         } else {
             io.to(roomId).emit('roomUpdate', room.toJSON());
             io.to(roomId).emit('chatMessage', {
@@ -503,6 +564,7 @@ io.on('connection', (socket) => {
         }
         
         socket.roomId = null;
+        console.log(`${socket.username} left room ${roomId}`);
     });
     
     socket.on('updateSettings', ({ roomId, settings }) => {
@@ -524,7 +586,7 @@ io.on('connection', (socket) => {
         }
         
         if (!room.startGame()) {
-            socket.emit('error', 'Spiel kann nicht gestartet werden');
+            socket.emit('error', 'Spiel kann nicht gestartet werden (mindestens 3 Spieler benötigt)');
             return;
         }
         
@@ -550,39 +612,49 @@ io.on('connection', (socket) => {
             
             if (room.currentRound.timeRemaining <= 0) {
                 clearInterval(timer);
+                roomTimers.delete(roomId);
                 room.endRound();
                 io.to(roomId).emit('votingPhase', { 
-                    players: room.players.filter(p => p.id !== socket.userId)
+                    players: room.players
                 });
+                io.to(roomId).emit('roomUpdate', room.toJSON());
             }
         }, 1000);
+        
+        roomTimers.set(roomId, timer);
+        console.log(`Game started in room ${roomId}, imposter: ${room.currentRound.imposter.username}`);
     });
     
     socket.on('skipVote', (roomId) => {
         const room = rooms.get(roomId);
         if (!room || room.gameState !== 'playing') return;
         
-        room.addSkipVote(socket.userId);
-        io.to(roomId).emit('roomUpdate', room.toJSON());
-        
-        if (room.gameState === 'voting') {
+        if (room.addSkipVote(socket.userId)) {
+            // Clear the game timer
+            if (roomTimers.has(roomId)) {
+                clearInterval(roomTimers.get(roomId));
+                roomTimers.delete(roomId);
+            }
+            
             io.to(roomId).emit('votingPhase', { 
                 players: room.players
             });
         }
+        
+        io.to(roomId).emit('roomUpdate', room.toJSON());
     });
     
     socket.on('vote', ({ roomId, playerId }) => {
         const room = rooms.get(roomId);
         if (!room || room.gameState !== 'voting') return;
         
-        room.addVote(socket.userId, playerId);
+        const results = room.addVote(socket.userId, playerId);
         
-        if (room.gameState === 'ended') {
-            const results = room.endGame();
+        if (results) {
             io.to(roomId).emit('gameEnded', results);
             
             setTimeout(() => {
+                room.resetGame();
                 io.to(roomId).emit('roomUpdate', room.toJSON());
             }, 10000);
         }
@@ -590,9 +662,9 @@ io.on('connection', (socket) => {
     
     socket.on('sendMessage', ({ roomId, message }) => {
         const room = rooms.get(roomId);
-        if (!room) return;
+        if (!room || !socket.username) return;
         
-        if (message.trim().length > 0) {
+        if (message.trim().length > 0 && message.trim().length <= 500) {
             io.to(roomId).emit('chatMessage', {
                 sender: socket.username,
                 message: message.trim(),
@@ -610,24 +682,51 @@ io.on('connection', (socket) => {
         if (socket.roomId) {
             const room = rooms.get(socket.roomId);
             if (room) {
+                // Clear any existing timer
+                if (roomTimers.has(socket.roomId)) {
+                    clearInterval(roomTimers.get(socket.roomId));
+                    roomTimers.delete(socket.roomId);
+                }
+                
                 if (room.removePlayer(socket.userId)) {
                     rooms.delete(socket.roomId);
+                    console.log(`Room ${socket.roomId} deleted (empty after disconnect)`);
                 } else {
                     io.to(socket.roomId).emit('roomUpdate', room.toJSON());
-                    io.to(socket.roomId).emit('chatMessage', {
-                        sender: 'System',
-                        message: `${socket.username} hat die Verbindung verloren`,
-                        timestamp: new Date().toLocaleTimeString(),
-                        type: 'system'
-                    });
+                    if (socket.username) {
+                        io.to(socket.roomId).emit('chatMessage', {
+                            sender: 'System',
+                            message: `${socket.username} hat die Verbindung verloren`,
+                            timestamp: new Date().toLocaleTimeString(),
+                            type: 'system'
+                        });
+                    }
                 }
             }
         }
     });
 });
 
+// Error handling
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Rejection:', err);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    server.close(() => {
+        db.close();
+        process.exit(0);
+    });
+});
+
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server läuft auf Port ${PORT}`);
     console.log(`Öffne http://localhost:${PORT} zum Spielen`);
 });
